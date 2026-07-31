@@ -1,0 +1,115 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  One-time bootstrap stack for the LangGraph/Nova AgentCore agent.
+  Creates the ECR repository the pipeline pushes images to, and the IAM
+  execution role that AgentCore Runtime assumes to run the container and
+  call the Nova model. Deploy this ONCE, before the first image push:
+
+    aws cloudformation deploy \
+      --template-file cloudformation/bootstrap.yaml \
+      --stack-name langgraph-nova-agent-bootstrap \
+      --capabilities CAPABILITY_NAMED_IAM \
+      --parameter-overrides RepositoryName=langgraph-nova-agent
+
+Parameters:
+  RepositoryName:
+    Type: String
+    Default: langgraph-nova-agent
+    Description: Name of the ECR repository to hold the agent container image.
+
+  ExecutionRoleName:
+    Type: String
+    Default: langgraph-nova-agentcore-execution-role
+    Description: Name of the IAM role AgentCore Runtime assumes at run time.
+
+Resources:
+  AgentEcrRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref RepositoryName
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: MUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last 10 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+
+  AgentCoreExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref ExecutionRoleName
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowAgentCoreToAssumeRole
+            Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub "arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:*"
+      Policies:
+        - PolicyName: agentcore-execution-permissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: InvokeNovaModel
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:Converse
+                  - bedrock:ConverseStream
+                Resource:
+                  - "arn:aws:bedrock:*::foundation-model/amazon.nova-*"
+                  - "arn:aws:bedrock:*:*:inference-profile/*.amazon.nova-*"
+              - Sid: PullContainerImage
+                Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: !GetAtt AgentEcrRepository.Arn
+              - Sid: WriteLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "arn:aws:logs:*:*:*"
+
+Outputs:
+  RepositoryUri:
+    Description: ECR repository URI to build/push the agent image to.
+    Value: !GetAtt AgentEcrRepository.RepositoryUri
+    Export:
+      Name: !Sub "${AWS::StackName}-RepositoryUri"
+
+  RepositoryName:
+    Description: ECR repository name.
+    Value: !Ref AgentEcrRepository
+    Export:
+      Name: !Sub "${AWS::StackName}-RepositoryName"
+
+  ExecutionRoleArn:
+    Description: IAM role ARN for the AgentCore Runtime to assume.
+    Value: !GetAtt AgentCoreExecutionRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ExecutionRoleArn"

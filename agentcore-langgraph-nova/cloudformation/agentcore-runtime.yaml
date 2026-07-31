@@ -1,0 +1,81 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Creates/updates the Amazon Bedrock AgentCore Runtime for the LangGraph +
+  Nova hello-world agent. Run this AFTER an image has been pushed to ECR
+  (see cloudformation/bootstrap.yaml for the repo + execution role).
+
+  `aws cloudformation deploy` is idempotent: the first run CREATES the
+  AgentCore Runtime; every later run with a new ImageUri UPDATES it in
+  place (a no-interruption update per AWS::BedrockAgentCore::Runtime docs) -
+  no custom deploy script required.
+
+Parameters:
+  AgentRuntimeName:
+    Type: String
+    Default: langgraph_nova_hello_world
+    AllowedPattern: "[a-zA-Z][a-zA-Z0-9_]{0,47}"
+    Description: Name of the AgentCore Runtime (letters, numbers, underscore only).
+
+  ImageUri:
+    Type: String
+    Description: >
+      Full ECR image URI including tag or digest, e.g.
+      123456789012.dkr.ecr.us-east-1.amazonaws.com/langgraph-nova-agent:abc1234
+
+  ExecutionRoleArn:
+    Type: String
+    Description: >
+      ARN of the IAM role AgentCore Runtime assumes at run time. Import this
+      from the bootstrap stack output ExecutionRoleArn.
+
+  BedrockModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+    Description: Bedrock Nova model id passed to the container as an env var.
+
+  NetworkMode:
+    Type: String
+    Default: PUBLIC
+    AllowedValues:
+      - PUBLIC
+      - VPC
+    Description: Network mode for the AgentCore Runtime.
+
+Resources:
+  LangGraphNovaAgentRuntime:
+    Type: AWS::BedrockAgentCore::Runtime
+    Properties:
+      AgentRuntimeName: !Ref AgentRuntimeName
+      Description: LangGraph hello-world agent backed by Amazon Nova, deployed via CI/CD.
+      AgentRuntimeArtifact:
+        ContainerConfiguration:
+          ContainerUri: !Ref ImageUri
+      RoleArn: !Ref ExecutionRoleArn
+      ProtocolConfiguration: HTTP
+      NetworkConfiguration:
+        NetworkMode: !Ref NetworkMode
+      EnvironmentVariables:
+        BEDROCK_MODEL_ID: !Ref BedrockModelId
+      Tags:
+        ManagedBy: cloudformation
+        Framework: langgraph
+        Model: nova
+
+Outputs:
+  AgentRuntimeArn:
+    Description: ARN of the AgentCore Runtime.
+    Value: !GetAtt LangGraphNovaAgentRuntime.AgentRuntimeArn
+    Export:
+      Name: !Sub "${AWS::StackName}-AgentRuntimeArn"
+
+  AgentRuntimeId:
+    Description: Unique ID of the AgentCore Runtime.
+    Value: !GetAtt LangGraphNovaAgentRuntime.AgentRuntimeId
+
+  AgentRuntimeStatus:
+    Description: Current status of the AgentCore Runtime.
+    Value: !GetAtt LangGraphNovaAgentRuntime.Status
+
+  AgentRuntimeVersion:
+    Description: Version of the AgentCore Runtime currently deployed.
+    Value: !GetAtt LangGraphNovaAgentRuntime.AgentRuntimeVersion
