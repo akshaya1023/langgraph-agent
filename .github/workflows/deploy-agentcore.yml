@@ -135,11 +135,22 @@ jobs:
 
       - name: Smoke test deployed agent
         run: |
+          cat > payload.json <<EOF
+          {
+            "prompt": "Say hello and tell me what model powers you."
+          }
+          EOF
+
           aws bedrock-agentcore invoke-agent-runtime \
             --agent-runtime-arn "${{ steps.runtime.outputs.agent_runtime_arn }}" \
-            --payload '{"prompt": "Say hello and tell me what model powers you."}' \
+            --content-type "application/json" \
+            --accept "application/json" \
+            --cli-binary-format raw-in-base64-out \
+            --payload file://payload.json \
             --region "${AWS_REGION}" \
             response.json
+
+          echo "===== Agent Response ====="
           cat response.json
 
       - name: Summary
