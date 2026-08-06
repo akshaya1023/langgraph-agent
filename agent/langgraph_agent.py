@@ -35,36 +35,12 @@ from bedrock_agentcore.runtime import BedrockAgentCoreApp
 NOVA_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 
-llm = init_chat_model(
-    NOVA_MODEL_ID,
-    model_provider="bedrock_converse",
-    region_name=AWS_REGION,
-    temperature=0.3,
-)
-
-llm_with_tools = llm.bind_tools(tools)
-
-
-# ---------------------------------------------------------------------------
-# 2. Define LangGraph state + a single "hello world" node
-# ---------------------------------------------------------------------------
-class GraphState(TypedDict):
-    messages: Annotated[list, add_messages]
-
-
 GATEWAY_URL = os.environ.get(
     "GATEWAY_URL",
     "https://hospital-agent-gateway-4wonadpgog.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
 )
 
-SYSTEM_PROMPT = (
-    "You are a helpful hospital assistant running on Amazon Bedrock AgentCore. "
-    "You have access to tools to calculate invoices and get HR information. "
-    "Use the available tools to answer questions about hospital services, pricing, and staff. "
-    "Keep answers clear and concise."
-)
-
-
+# Define tools first, before LLM initialization
 @tool
 def calculate_invoice(services: list, discount_percent: float = 0, insurance_covered: bool = False) -> str:
     """Calculate a hospital invoice based on services, discount, and insurance coverage.
@@ -114,6 +90,30 @@ def get_hr_info(department: str) -> str:
 
 
 tools = [calculate_invoice, get_hr_info]
+
+llm = init_chat_model(
+    NOVA_MODEL_ID,
+    model_provider="bedrock_converse",
+    region_name=AWS_REGION,
+    temperature=0.3,
+)
+
+llm_with_tools = llm.bind_tools(tools)
+
+
+# ---------------------------------------------------------------------------
+# 2. Define LangGraph state
+# ---------------------------------------------------------------------------
+class GraphState(TypedDict):
+    messages: Annotated[list, add_messages]
+
+
+SYSTEM_PROMPT = (
+    "You are a helpful hospital assistant running on Amazon Bedrock AgentCore. "
+    "You have access to tools to calculate invoices and get HR information. "
+    "Use the available tools to answer questions about hospital services, pricing, and staff. "
+    "Keep answers clear and concise."
+)
 
 
 def call_model(state: GraphState) -> GraphState:
