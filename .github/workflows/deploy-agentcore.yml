@@ -2,7 +2,7 @@ name: Build and Deploy LangGraph Agent to Bedrock AgentCore
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/gateway-tools]
     paths:
       - "agent/**"
       - "Dockerfile"
@@ -19,6 +19,7 @@ env:
   ECR_REPOSITORY: langgraph-nova-agent
   BOOTSTRAP_STACK_NAME: langgraph-nova-agent-bootstrap
   RUNTIME_STACK_NAME: langgraph-nova-agent-runtime
+  LAMBDA_TOOLS_STACK_NAME: agentcore-lambda-tools
   AGENT_RUNTIME_NAME: langgraph_nova_hello_world
   BEDROCK_MODEL_ID: amazon.nova-lite-v1:0
 
@@ -64,7 +65,19 @@ jobs:
           echo "role_arn=${ROLE_ARN}" >> "$GITHUB_OUTPUT"
 
       # ---------------------------------------------------------------
-      # 2. Build and push the image FIRST - the AgentCore Runtime
+      # 2a. Deploy the Lambda tools (Invoice Processor & HR Assistant)
+      #     These tools are used by the AgentCore Gateway
+      # ---------------------------------------------------------------
+      - name: Deploy Lambda tools stack
+        run: |
+          aws cloudformation deploy \
+            --template-file cloudformation/lambda-tools.yaml \
+            --stack-name "${LAMBDA_TOOLS_STACK_NAME}" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset
+
+      # ---------------------------------------------------------------
+      # 3. Build and push the image FIRST - the AgentCore Runtime
       #    resource cannot be created/updated to point at an image
       #    that doesn't exist in ECR yet.
       # ---------------------------------------------------------------
@@ -106,7 +119,7 @@ jobs:
           done
 
       # ---------------------------------------------------------------
-      # 3. Deploy the AgentCore Runtime stack.
+      # 4. Deploy the AgentCore Runtime stack.
       #    First ever run  -> CREATE_COMPLETE (creates the Runtime).
       #    Every run after -> UPDATE_COMPLETE (points ContainerUri at
       #                       the new image; no-interruption update).

@@ -109,6 +109,31 @@ Resources:
                   "body": json.dumps({"department": dept, "staff": staff})
               }
 
+  # 4. Lambda Resource Policies - Allow API Gateway/Bedrock AgentCore to invoke
+  InvoiceProcessorGatewayPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref InvoiceProcessorFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/POST/calculate-treatment-invoice"
+
+  InvoiceProcessorGatewayPermission2:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref InvoiceProcessorFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/GET/get-staff-schedule"
+
+  HRAssistantGatewayPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref HRAssistantFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/POST/get-hr-info"
+
 Outputs:
   InvoiceProcessorArn:
     Description: ARN for the Invoice Processor Tool
