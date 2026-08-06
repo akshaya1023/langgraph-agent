@@ -14,8 +14,9 @@ Local test:
 
 import os
 import json
-import requests
 from typing import Annotated, TypedDict
+import asyncio
+import httpx
 
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
@@ -23,15 +24,14 @@ from langchain_core.tools import tool
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
+from mcp.client.stdio import StdioClientSession
+from mcp.client.sse import SSEClientSession
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 
 # ---------------------------------------------------------------------------
 # 1. Configure the Amazon Nova model via Bedrock Converse API
 # ---------------------------------------------------------------------------
-# Use a cross-region inference profile id if your account requires one, e.g.
-# "us.amazon.nova-lite-v1:0". Override via env var for flexibility across
-# environments (dev/stage/prod) without touching code.
 NOVA_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 
@@ -40,53 +40,49 @@ GATEWAY_URL = os.environ.get(
     "https://hospital-agent-gateway-4wonadpgog.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
 )
 
-# Define tools first, before LLM initialization
+# Initialize MCP client for gateway
+async def get_gateway_tools():
+    """Connect to gateway MCP server and get available tools"""
+    async with SSEClientSession(GATEWAY_URL) as session:
+        tools_list = await session.list_tools()
+        return tools_list.tools
+
+
+# Create tool wrappers for gateway tools
 @tool
 def calculate_invoice(services: list, discount_percent: float = 0, insurance_covered: bool = False) -> str:
-    """Calculate a hospital invoice based on services, discount, and insurance coverage.
-
-    Args:
-        services: List of hospital services (e.g., ["general consultation", "blood test"])
-        discount_percent: Discount percentage (0-100)
-        insurance_covered: Whether insurance covers the bill
-    """
+    """Calculate a hospital invoice based on services, discount, and insurance coverage."""
     try:
         payload = {
             "services": services,
             "discount_percent": discount_percent,
             "insurance_covered": insurance_covered
         }
-        response = requests.post(
-            f"{GATEWAY_URL}/calculate_invoice",
-            json=payload,
-            timeout=10
-        )
-        if response.status_code == 200:
-            return json.dumps(response.json())
-        return f"Error: {response.status_code} - {response.text}"
+        async def invoke():
+            async with SSEClientSession(GATEWAY_URL) as session:
+                result = await session.call_tool("calculate_invoice", payload)
+                return result.content[0].text if result.content else ""
+
+        loop = asyncio.get_event_loop()
+        return loop.run_until_complete(invoke())
     except Exception as e:
-        return f"Error calling invoice service: {str(e)}"
+        return f"Error: {str(e)}"
 
 
 @tool
 def get_hr_info(department: str) -> str:
-    """Get HR information about hospital staff and schedules.
-
-    Args:
-        department: Hospital department (e.g., "cardiology", "emergency")
-    """
+    """Get HR information about hospital staff and schedules."""
     try:
         payload = {"department": department}
-        response = requests.post(
-            f"{GATEWAY_URL}/get_hr_info",
-            json=payload,
-            timeout=10
-        )
-        if response.status_code == 200:
-            return json.dumps(response.json())
-        return f"Error: {response.status_code} - {response.text}"
+        async def invoke():
+            async with SSEClientSession(GATEWAY_URL) as session:
+                result = await session.call_tool("get_hr_info", payload)
+                return result.content[0].text if result.content else ""
+
+        loop = asyncio.get_event_loop()
+        return loop.run_until_complete(invoke())
     except Exception as e:
-        return f"Error calling HR service: {str(e)}"
+        return f"Error: {str(e)}"
 
 
 tools = [calculate_invoice, get_hr_info]
