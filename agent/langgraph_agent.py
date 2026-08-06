@@ -13,12 +13,16 @@ Local test:
 """
 
 import os
+import json
+import requests
 from typing import Annotated, TypedDict
 
 from langchain.chat_models import init_chat_model
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
+from langchain_core.tools import tool
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 
@@ -38,6 +42,8 @@ llm = init_chat_model(
     temperature=0.3,
 )
 
+llm_with_tools = llm.bind_tools(tools)
+
 
 # ---------------------------------------------------------------------------
 # 2. Define LangGraph state + a single "hello world" node
@@ -46,23 +52,95 @@ class GraphState(TypedDict):
     messages: Annotated[list, add_messages]
 
 
+GATEWAY_URL = os.environ.get(
+    "GATEWAY_URL",
+    "https://hospital-agent-gateway-4wonadpgog.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
+)
+
 SYSTEM_PROMPT = (
-    "You are a friendly hello-world assistant running on Amazon Bedrock "
-    "AgentCore, backed by an Amazon Nova model. Keep answers short and clear."
+    "You are a helpful hospital assistant running on Amazon Bedrock AgentCore. "
+    "You have access to tools to calculate invoices and get HR information. "
+    "Use the available tools to answer questions about hospital services, pricing, and staff. "
+    "Keep answers clear and concise."
 )
 
 
+@tool
+def calculate_invoice(services: list, discount_percent: float = 0, insurance_covered: bool = False) -> str:
+    """Calculate a hospital invoice based on services, discount, and insurance coverage.
+
+    Args:
+        services: List of hospital services (e.g., ["general consultation", "blood test"])
+        discount_percent: Discount percentage (0-100)
+        insurance_covered: Whether insurance covers the bill
+    """
+    try:
+        payload = {
+            "services": services,
+            "discount_percent": discount_percent,
+            "insurance_covered": insurance_covered
+        }
+        response = requests.post(
+            f"{GATEWAY_URL}/calculate_invoice",
+            json=payload,
+            timeout=10
+        )
+        if response.status_code == 200:
+            return json.dumps(response.json())
+        return f"Error: {response.status_code} - {response.text}"
+    except Exception as e:
+        return f"Error calling invoice service: {str(e)}"
+
+
+@tool
+def get_hr_info(department: str) -> str:
+    """Get HR information about hospital staff and schedules.
+
+    Args:
+        department: Hospital department (e.g., "cardiology", "emergency")
+    """
+    try:
+        payload = {"department": department}
+        response = requests.post(
+            f"{GATEWAY_URL}/get_hr_info",
+            json=payload,
+            timeout=10
+        )
+        if response.status_code == 200:
+            return json.dumps(response.json())
+        return f"Error: {response.status_code} - {response.text}"
+    except Exception as e:
+        return f"Error calling HR service: {str(e)}"
+
+
+tools = [calculate_invoice, get_hr_info]
+
+
 def call_model(state: GraphState) -> GraphState:
-    """Single LangGraph node: send the conversation so far to Nova."""
+    """LangGraph node: send the conversation to Nova with tool support."""
     messages = [SystemMessage(content=SYSTEM_PROMPT), *state["messages"]]
-    response = llm.invoke(messages)
+    response = llm_with_tools.invoke(messages)
     return {"messages": [response]}
+
+
+def should_use_tools(state: GraphState) -> str:
+    """Route to tools if the model wants to call them."""
+    last_message = state["messages"][-1]
+    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+        return "tools"
+    return "end"
 
 
 graph_builder = StateGraph(GraphState)
 graph_builder.add_node("call_model", call_model)
+graph_builder.add_node("tools", ToolNode(tools))
 graph_builder.add_edge(START, "call_model")
-graph_builder.add_edge("call_model", END)
+graph_builder.add_conditional_edges(
+    "call_model",
+    should_use_tools,
+    {"tools": "tools", "end": END}
+)
+graph_builder.add_edge("tools", "call_model")
 
 graph = graph_builder.compile()
 
