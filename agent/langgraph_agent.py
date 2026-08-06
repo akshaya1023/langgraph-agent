@@ -1,9 +1,10 @@
 """
-LangGraph agent that properly uses gateway via MCP protocol.
+LangGraph agent that uses gateway tools via MCP SDK v2.0.0.
 """
 
 import os
 import json
+import asyncio
 from typing import Annotated, TypedDict
 
 from langchain.chat_models import init_chat_model
@@ -14,8 +15,8 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
-from mcp.client.session import ClientSession
-from mcp.client.sse import SSEClientSession
+from mcp import ClientSession
+from mcp.client.sse import sse_client
 
 NOVA_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
@@ -33,29 +34,36 @@ llm = init_chat_model(
 )
 
 
-def _call_gateway_tool(tool_name: str, tool_input: dict) -> str:
-    """Call a tool through the gateway MCP server synchronously."""
-    import asyncio
+async def call_gateway_tool_async(tool_name: str, tool_input: dict) -> str:
+    """Call a tool through the gateway MCP server via SSE."""
+    try:
+        async with sse_client(GATEWAY_URL) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                result = await session.call_tool(name=tool_name, arguments=tool_input)
 
-    async def call_async():
-        try:
-            async with SSEClientSession(GATEWAY_URL) as session:
-                result = await session.call_tool(tool_name, tool_input)
                 if result.content:
-                    return json.dumps({"success": True, "result": result.content[0].text})
-                return json.dumps({"success": False, "error": "No response from tool"})
-        except Exception as e:
-            return json.dumps({"success": False, "error": str(e)})
+                    response_text = result.content[0].text if hasattr(result.content[0], 'text') else str(result.content[0])
+                    return json.dumps({"success": True, "result": response_text})
+                else:
+                    return json.dumps({"success": False, "error": "No response from tool"})
+    except Exception as e:
+        return json.dumps({"success": False, "error": f"{type(e).__name__}: {str(e)}"})
 
+
+def call_gateway_tool_sync(tool_name: str, tool_input: dict) -> str:
+    """Synchronous wrapper for calling gateway tools."""
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            # If loop is already running, create a new one
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        return loop.run_until_complete(call_async())
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, call_gateway_tool_async(tool_name, tool_input))
+                return future.result()
+        else:
+            return asyncio.run(call_gateway_tool_async(tool_name, tool_input))
     except Exception as e:
-        return json.dumps({"success": False, "error": str(e)})
+        return json.dumps({"success": False, "error": f"Failed to call tool: {str(e)}"})
 
 
 @tool
@@ -66,14 +74,14 @@ def calculate_invoice(services: list, discount_percent: float = 0, insurance_cov
         "discount_percent": discount_percent,
         "insurance_covered": insurance_covered
     }
-    return _call_gateway_tool("calculate_invoice", tool_input)
+    return call_gateway_tool_sync("calculate_invoice", tool_input)
 
 
 @tool
 def get_hr_info(department: str) -> str:
     """Get HR information about hospital staff and schedules."""
     tool_input = {"department": department}
-    return _call_gateway_tool("get_hr_info", tool_input)
+    return call_gateway_tool_sync("get_hr_info", tool_input)
 
 
 tools = [calculate_invoice, get_hr_info]
