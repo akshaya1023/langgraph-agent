@@ -1,10 +1,9 @@
 """
-LangGraph agent that uses gateway tools via HTTP requests.
+LangGraph agent that properly uses gateway via MCP protocol.
 """
 
 import os
 import json
-import httpx
 from typing import Annotated, TypedDict
 
 from langchain.chat_models import init_chat_model
@@ -15,6 +14,8 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
+from mcp.client.session import ClientSession
+from mcp.client.sse import SSEClientSession
 
 NOVA_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
@@ -32,42 +33,47 @@ llm = init_chat_model(
 )
 
 
+def _call_gateway_tool(tool_name: str, tool_input: dict) -> str:
+    """Call a tool through the gateway MCP server synchronously."""
+    import asyncio
+
+    async def call_async():
+        try:
+            async with SSEClientSession(GATEWAY_URL) as session:
+                result = await session.call_tool(tool_name, tool_input)
+                if result.content:
+                    return json.dumps({"success": True, "result": result.content[0].text})
+                return json.dumps({"success": False, "error": "No response from tool"})
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)})
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # If loop is already running, create a new one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        return loop.run_until_complete(call_async())
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+
 @tool
 def calculate_invoice(services: list, discount_percent: float = 0, insurance_covered: bool = False) -> str:
     """Calculate a hospital invoice based on services, discount, and insurance coverage."""
-    try:
-        payload = {
-            "services": services,
-            "discount_percent": discount_percent,
-            "insurance_covered": insurance_covered
-        }
-        response = httpx.post(
-            f"{GATEWAY_URL}/calculate_invoice",
-            json=payload,
-            timeout=10.0
-        )
-        if response.status_code == 200:
-            return json.dumps(response.json())
-        return f"Error: {response.status_code}"
-    except Exception as e:
-        return f"Error: {str(e)}"
+    tool_input = {
+        "services": services,
+        "discount_percent": discount_percent,
+        "insurance_covered": insurance_covered
+    }
+    return _call_gateway_tool("calculate_invoice", tool_input)
 
 
 @tool
 def get_hr_info(department: str) -> str:
     """Get HR information about hospital staff and schedules."""
-    try:
-        payload = {"department": department}
-        response = httpx.post(
-            f"{GATEWAY_URL}/get_hr_info",
-            json=payload,
-            timeout=10.0
-        )
-        if response.status_code == 200:
-            return json.dumps(response.json())
-        return f"Error: {response.status_code}"
-    except Exception as e:
-        return f"Error: {str(e)}"
+    tool_input = {"department": department}
+    return _call_gateway_tool("get_hr_info", tool_input)
 
 
 tools = [calculate_invoice, get_hr_info]
