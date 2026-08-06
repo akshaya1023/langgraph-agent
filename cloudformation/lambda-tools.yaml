@@ -1,0 +1,123 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Deploys the Lambda functions (Tools) for the AgentCore Hospital Use Case.
+
+Resources:
+  # 1. The IAM Role for the Lambda Functions
+  LambdaToolExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: agentcore-lambda-tools-execution-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # This AWS-managed policy grants permission to write logs to CloudWatch
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  # 2. Tool 1: Invoice Processor
+  InvoiceProcessorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: HospitalInvoiceProcessor
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaToolExecutionRole.Arn
+      Runtime: python3.12
+      Timeout: 15 # Tools should fail fast if they hang
+      Code:
+        ZipFile: |
+          import json
+          import logging
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          SERVICE_PRICING = {
+              "general consultation": 100.0, "specialist consultation": 200.0,
+              "blood test": 50.0, "x-ray": 150.0, "mri scan": 800.0,
+              "ct scan": 600.0, "physiotherapy": 120.0, "emergency room visit": 500.0
+          }
+          TAX_RATE = 0.08
+
+          def lambda_handler(event, context):
+              logger.info(f"Invoice request: {json.dumps(event)}")
+              try:
+                  services = event.get("services", [])
+                  insurance = event.get("insurance_covered", False)
+                  discount = float(event.get("discount_percent", 0.0))
+                  
+                  if not services:
+                      return {"statusCode": 400, "body": json.dumps({"error": "No services provided."})}
+                  
+                  subtotal = sum(SERVICE_PRICING.get(s.strip().lower(), 150.0) for s in services)
+                  discount_amt = subtotal * (discount / 100.0)
+                  tax_amt = (subtotal - discount_amt) * TAX_RATE
+                  total_gross = subtotal - discount_amt + tax_amt
+                  insurance_paid = total_gross * 0.80 if insurance else 0.0
+                  
+                  return {
+                      "statusCode": 200,
+                      "body": json.dumps({
+                          "subtotal": round(subtotal, 2),
+                          "tax": round(tax_amt, 2),
+                          "total_gross": round(total_gross, 2),
+                          "patient_due": round(total_gross - insurance_paid, 2)
+                      })
+                  }
+              except Exception as e:
+                  return {"statusCode": 500, "body": json.dumps({"error": str(e)})}
+
+  # 3. Tool 2: HR Assistant
+  HRAssistantFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: HospitalHRAssistant
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaToolExecutionRole.Arn
+      Runtime: python3.12
+      Timeout: 10
+      Code:
+        ZipFile: |
+          import json
+          import logging
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          DUTY_SCHEDULE = {
+              "cardiology": [{"name": "Dr. Sarah Patel", "role": "Senior Cardiologist"}],
+              "emergency": [{"name": "Dr. Robert Vance", "role": "ER Attending Physician"}]
+          }
+
+          def lambda_handler(event, context):
+              logger.info(f"HR request: {json.dumps(event)}")
+              dept = event.get("department", "").strip().lower()
+              
+              if not dept:
+                  return {"statusCode": 400, "body": json.dumps({"error": "Department required."})}
+                  
+              staff = DUTY_SCHEDULE.get(dept)
+              if not staff:
+                  return {"statusCode": 404, "body": json.dumps({"error": f"No staff found for {dept}."})}
+                  
+              return {
+                  "statusCode": 200,
+                  "body": json.dumps({"department": dept, "staff": staff})
+              }
+
+Outputs:
+  InvoiceProcessorArn:
+    Description: ARN for the Invoice Processor Tool
+    Value: !GetAtt InvoiceProcessorFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-InvoiceProcessorArn"
+
+  HRAssistantArn:
+    Description: ARN for the HR Assistant Tool
+    Value: !GetAtt HRAssistantFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-HRAssistantArn"
