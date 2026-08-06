@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy agent source
 COPY agent/langgraph_agent.py ./langgraph_agent.py
+COPY agent/tools.py ./tools.py
 
 # AgentCore passes model/region config as env vars at deploy time; these are
 # just safe defaults for local `docker run` testing.
