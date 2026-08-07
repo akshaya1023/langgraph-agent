@@ -79,22 +79,40 @@ def call_gateway_tool_sync(tool_name: str, tool_input: dict) -> str:
 @tool
 def calculate_invoice(services: list, discount_percent: float = 0, insurance_covered: bool = False) -> str:
     """Calculate a hospital invoice based on services, discount, and insurance coverage."""
-    tool_input = {
-        "services": services,
-        "discount_percent": discount_percent,
-        "insurance_covered": insurance_covered
-    }
-    return call_gateway_tool_sync("calculate_invoice", tool_input)
+    try:
+        tool_input = {
+            "services": services,
+            "discount_percent": discount_percent,
+            "insurance_covered": insurance_covered
+        }
+        result = call_gateway_tool_sync("calculate_invoice", tool_input)
+        result_obj = json.loads(result)
+        if result_obj.get("success"):
+            return result_obj.get("result", "No result")
+        else:
+            return f"ERROR: {result_obj.get('error', 'Unknown error')}"
+    except Exception as e:
+        import traceback
+        return f"EXCEPTION: {type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
 
 
 @tool
 def get_hr_info(employee_id: str, info_type: str = "schedule") -> str:
     """Get HR information for an employee including schedule, benefits, and HR details."""
-    tool_input = {
-        "employeeId": employee_id,
-        "infoType": info_type
-    }
-    return call_gateway_tool_sync("get_hr_info", tool_input)
+    try:
+        tool_input = {
+            "employeeId": employee_id,
+            "infoType": info_type
+        }
+        result = call_gateway_tool_sync("get_hr_info", tool_input)
+        result_obj = json.loads(result)
+        if result_obj.get("success"):
+            return result_obj.get("result", "No result")
+        else:
+            return f"ERROR: {result_obj.get('error', 'Unknown error')}"
+    except Exception as e:
+        import traceback
+        return f"EXCEPTION: {type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
 
 
 tools = [calculate_invoice, get_hr_info]
