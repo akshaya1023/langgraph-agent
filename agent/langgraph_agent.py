@@ -64,16 +64,25 @@ async def call_gateway_tool_async(tool_name: str, tool_input: dict) -> str:
 def call_gateway_tool_sync(tool_name: str, tool_input: dict) -> str:
     """Synchronous wrapper for calling gateway tools."""
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
+        # Check if there's already a running event loop
+        try:
+            loop = asyncio.get_running_loop()
+            is_running = True
+        except RuntimeError:
+            is_running = False
+
+        if is_running:
+            # We're in async context, use thread pool to run the async function
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(asyncio.run, call_gateway_tool_async(tool_name, tool_input))
                 return future.result()
         else:
+            # No running loop, we can create one
             return asyncio.run(call_gateway_tool_async(tool_name, tool_input))
     except Exception as e:
-        return json.dumps({"success": False, "error": f"Failed to call tool: {str(e)}"})
+        import traceback
+        return json.dumps({"success": False, "error": f"{type(e).__name__}: {str(e)}", "traceback": traceback.format_exc()})
 
 
 @tool
