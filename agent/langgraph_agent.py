@@ -74,14 +74,14 @@ def calculate_invoice(services: list, discount_percent: float = 0, insurance_cov
         "discount_percent": discount_percent,
         "insurance_covered": insurance_covered
     }
-    return call_gateway_tool_sync("calculate_invoice", tool_input)
+    return call_gateway_tool_sync("calculate-treatment-invoice", tool_input)
 
 
 @tool
 def get_hr_info(department: str) -> str:
     """Get HR information about hospital staff and schedules."""
     tool_input = {"department": department}
-    return call_gateway_tool_sync("get_hr_info", tool_input)
+    return call_gateway_tool_sync("get-hr-info", tool_input)
 
 
 tools = [calculate_invoice, get_hr_info]
