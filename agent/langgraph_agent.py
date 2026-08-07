@@ -38,9 +38,12 @@ llm = init_chat_model(
 def call_gateway_tool(tool_name: str, tool_input: dict) -> str:
     """Call a tool through the Bedrock AgentCore Gateway via JSON-RPC HTTP POST."""
     try:
-        # Create AWS credentials for signing the request
+        # Get AWS credentials - boto3 handles IAM role credentials in containers
         session = boto3.Session()
         credentials = session.get_credentials()
+
+        if not credentials:
+            return json.dumps({"success": False, "error": "AWS credentials not found. Check IAM role."})
 
         # Gateway endpoint
         url = f"{GATEWAY_URL}/mcp"
@@ -60,23 +63,25 @@ def call_gateway_tool(tool_name: str, tool_input: dict) -> str:
         request = AWSRequest(method='POST', url=url, data=json.dumps(payload))
         SigV4Auth(credentials, 'bedrock-agentcore', AWS_REGION).add_auth(request)
 
-        # Make the HTTP POST call
-        response = requests.post(url, data=json.dumps(payload), headers=dict(request.headers))
+        # Make the HTTP POST call with timeout
+        response = requests.post(url, data=json.dumps(payload), headers=dict(request.headers), timeout=10)
 
         if response.status_code == 200:
             result = response.json()
             if "error" in result:
-                return json.dumps({"success": False, "error": result["error"].get("message", "Unknown error")})
+                error_msg = result["error"].get("message", "Unknown error")
+                return json.dumps({"success": False, "error": error_msg})
             elif "result" in result:
                 return json.dumps({"success": True, "result": result["result"]})
             else:
                 return json.dumps({"success": False, "error": "Unexpected response format"})
         else:
-            return json.dumps({"success": False, "error": f"HTTP {response.status_code}: {response.text}"})
+            return json.dumps({"success": False, "error": f"HTTP {response.status_code}: {response.text[:200]}"})
 
     except Exception as e:
         import traceback
-        return json.dumps({"success": False, "error": f"{type(e).__name__}: {str(e)}", "traceback": traceback.format_exc()})
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        return json.dumps({"success": False, "error": error_msg})
 
 
 @tool
