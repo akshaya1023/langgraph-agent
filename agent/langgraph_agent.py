@@ -4,7 +4,7 @@ LangGraph agent that uses gateway tools via MCP SDK v2.0.0.
 
 import os
 import json
-import asyncio
+import requests
 from typing import Annotated, TypedDict
 
 from langchain.chat_models import init_chat_model
@@ -15,8 +15,6 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
-from mcp import ClientSession
-from mcp.client.sse import sse_client
 import boto3
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
@@ -26,7 +24,7 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 
 GATEWAY_URL = os.environ.get(
     "GATEWAY_URL",
-    "https://hospital-agent-gateway-4wonadpgog.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
+    "https://hospital-agent-gateway-4wonadpgog.gateway.bedrock-agentcore.us-east-1.amazonaws.com"
 )
 
 llm = init_chat_model(
@@ -37,55 +35,45 @@ llm = init_chat_model(
 )
 
 
-async def call_gateway_tool_async(tool_name: str, tool_input: dict) -> str:
-    """Call a tool through the gateway MCP server via SSE with AWS authentication."""
+def call_gateway_tool(tool_name: str, tool_input: dict) -> str:
+    """Call a tool through the Bedrock AgentCore Gateway via JSON-RPC HTTP POST."""
     try:
         # Create AWS credentials for signing the request
         session = boto3.Session()
         credentials = session.get_credentials()
 
-        # Sign the gateway URL for authentication
-        request = AWSRequest(method='GET', url=GATEWAY_URL)
+        # Gateway endpoint
+        url = f"{GATEWAY_URL}/mcp"
+
+        # JSON-RPC payload
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": tool_name,
+                "arguments": tool_input
+            },
+            "id": 1
+        }
+
+        # Sign the request with AWS SigV4
+        request = AWSRequest(method='POST', url=url, data=json.dumps(payload))
         SigV4Auth(credentials, 'bedrock-agentcore', AWS_REGION).add_auth(request)
 
-        # Extract signed headers
-        headers = dict(request.headers)
+        # Make the HTTP POST call
+        response = requests.post(url, data=json.dumps(payload), headers=dict(request.headers))
 
-        async with sse_client(GATEWAY_URL, headers=headers) as (read_stream, write_stream):
-            async with ClientSession(read_stream, write_stream) as session:
-                await session.initialize()
-                result = await session.call_tool(name=tool_name, arguments=tool_input)
-
-                if result.content:
-                    response_text = result.content[0].text if hasattr(result.content[0], 'text') else str(result.content[0])
-                    return json.dumps({"success": True, "result": response_text})
-                else:
-                    return json.dumps({"success": False, "error": "No response from tool"})
-    except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-        return json.dumps({"success": False, "error": f"{type(e).__name__}: {str(e)}", "details": error_details})
-
-
-def call_gateway_tool_sync(tool_name: str, tool_input: dict) -> str:
-    """Synchronous wrapper for calling gateway tools."""
-    try:
-        # Check if there's already a running event loop
-        try:
-            loop = asyncio.get_running_loop()
-            is_running = True
-        except RuntimeError:
-            is_running = False
-
-        if is_running:
-            # We're in async context, use thread pool to run the async function
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, call_gateway_tool_async(tool_name, tool_input))
-                return future.result()
+        if response.status_code == 200:
+            result = response.json()
+            if "error" in result:
+                return json.dumps({"success": False, "error": result["error"].get("message", "Unknown error")})
+            elif "result" in result:
+                return json.dumps({"success": True, "result": result["result"]})
+            else:
+                return json.dumps({"success": False, "error": "Unexpected response format"})
         else:
-            # No running loop, we can create one
-            return asyncio.run(call_gateway_tool_async(tool_name, tool_input))
+            return json.dumps({"success": False, "error": f"HTTP {response.status_code}: {response.text}"})
+
     except Exception as e:
         import traceback
         return json.dumps({"success": False, "error": f"{type(e).__name__}: {str(e)}", "traceback": traceback.format_exc()})
@@ -100,15 +88,15 @@ def calculate_invoice(services: list, discount_percent: float = 0, insurance_cov
             "discount_percent": discount_percent,
             "insurance_covered": insurance_covered
         }
-        result = call_gateway_tool_sync("calculate_invoice", tool_input)
+        result = call_gateway_tool("target-invoiceprocessor___calculate_invoice", tool_input)
         result_obj = json.loads(result)
         if result_obj.get("success"):
-            return result_obj.get("result", "No result")
+            return str(result_obj.get("result", "No result"))
         else:
             return f"ERROR: {result_obj.get('error', 'Unknown error')}"
     except Exception as e:
         import traceback
-        return f"EXCEPTION: {type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+        return f"EXCEPTION: {type(e).__name__}: {str(e)}"
 
 
 @tool
@@ -119,15 +107,15 @@ def get_hr_info(employee_id: str, info_type: str = "schedule") -> str:
             "employeeId": employee_id,
             "infoType": info_type
         }
-        result = call_gateway_tool_sync("get_hr_info", tool_input)
+        result = call_gateway_tool("target-hrassitant___get_hr_info", tool_input)
         result_obj = json.loads(result)
         if result_obj.get("success"):
-            return result_obj.get("result", "No result")
+            return str(result_obj.get("result", "No result"))
         else:
             return f"ERROR: {result_obj.get('error', 'Unknown error')}"
     except Exception as e:
         import traceback
-        return f"EXCEPTION: {type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+        return f"EXCEPTION: {type(e).__name__}: {str(e)}"
 
 
 tools = [calculate_invoice, get_hr_info]
