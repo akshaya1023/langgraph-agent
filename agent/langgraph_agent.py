@@ -40,6 +40,13 @@ async def call_gateway_tool_async(tool_name: str, tool_input: dict) -> str:
         async with sse_client(GATEWAY_URL) as (read_stream, write_stream):
             async with ClientSession(read_stream, write_stream) as session:
                 await session.initialize()
+
+                # Debug: List available tools
+                tools = await session.list_tools()
+                available_names = [t.name for t in tools.tools] if hasattr(tools, 'tools') else []
+                print(f"DEBUG: Available tools: {available_names}")
+                print(f"DEBUG: Calling tool: {tool_name}")
+
                 result = await session.call_tool(name=tool_name, arguments=tool_input)
 
                 if result.content:
@@ -48,7 +55,10 @@ async def call_gateway_tool_async(tool_name: str, tool_input: dict) -> str:
                 else:
                     return json.dumps({"success": False, "error": "No response from tool"})
     except Exception as e:
-        return json.dumps({"success": False, "error": f"{type(e).__name__}: {str(e)}"})
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"DEBUG: Tool error: {error_details}")
+        return json.dumps({"success": False, "error": f"{type(e).__name__}: {str(e)}", "details": error_details})
 
 
 def call_gateway_tool_sync(tool_name: str, tool_input: dict) -> str:
