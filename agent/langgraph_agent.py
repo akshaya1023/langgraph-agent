@@ -17,6 +17,9 @@ from langgraph.prebuilt import ToolNode
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from mcp import ClientSession
 from mcp.client.sse import sse_client
+import boto3
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
 
 NOVA_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
@@ -35,18 +38,22 @@ llm = init_chat_model(
 
 
 async def call_gateway_tool_async(tool_name: str, tool_input: dict) -> str:
-    """Call a tool through the gateway MCP server via SSE."""
+    """Call a tool through the gateway MCP server via SSE with AWS authentication."""
     try:
-        async with sse_client(GATEWAY_URL) as (read_stream, write_stream):
+        # Create AWS credentials for signing the request
+        session = boto3.Session()
+        credentials = session.get_credentials()
+
+        # Sign the gateway URL for authentication
+        request = AWSRequest(method='GET', url=GATEWAY_URL)
+        SigV4Auth(credentials, 'bedrock-agentcore', AWS_REGION).add_auth(request)
+
+        # Extract signed headers
+        headers = dict(request.headers)
+
+        async with sse_client(GATEWAY_URL, headers=headers) as (read_stream, write_stream):
             async with ClientSession(read_stream, write_stream) as session:
                 await session.initialize()
-
-                # Debug: List available tools
-                tools = await session.list_tools()
-                available_names = [t.name for t in tools.tools] if hasattr(tools, 'tools') else []
-                print(f"DEBUG: Available tools: {available_names}")
-                print(f"DEBUG: Calling tool: {tool_name}")
-
                 result = await session.call_tool(name=tool_name, arguments=tool_input)
 
                 if result.content:
@@ -57,7 +64,6 @@ async def call_gateway_tool_async(tool_name: str, tool_input: dict) -> str:
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
-        print(f"DEBUG: Tool error: {error_details}")
         return json.dumps({"success": False, "error": f"{type(e).__name__}: {str(e)}", "details": error_details})
 
 
