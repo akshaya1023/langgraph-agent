@@ -94,6 +94,11 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource: "arn:aws:logs:*:*:*"
+              - Sid: InvokeGateway
+                Effect: Allow
+                Action:
+                  - bedrock-agentcore:InvokeGateway
+                Resource: "arn:aws:bedrock-agentcore:*:*:gateway/*"
 
 Outputs:
   RepositoryUri:
